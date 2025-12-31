@@ -1,0 +1,57 @@
+name: OpenTofu Remote Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test-remote-backend:
+    name: 'Test Remote Backend'
+    runs-on: ubuntu-latest
+    env:
+      TF_IN_AUTOMATION: "1"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.6.0
+
+      - name: Authenticate with TFState Backend
+        uses: actions/github-script@v6
+        env:
+          AUDIENCE: "https://tfdev.bonesoul.com" 
+          HOSTNAME: "tfdev.bonesoul.com"
+        with:
+          script: |
+            const aud = process.env.AUDIENCE;
+            // 1. Request OIDC token from GitHub
+            const id_token = await core.getIDToken(aud);
+            
+            // 2. Format the environment variable name: TF_TOKEN_hostname_com
+            const hostname_clean = process.env.HOSTNAME.replace(/\./g, '_');
+            const env_var_name = `TF_TOKEN_${hostname_clean}`;
+            
+            // 3. Export it as a secret for subsequent steps
+            core.exportVariable(env_var_name, id_token);
+            core.setSecret(id_token); // Mask in logs
+            console.log(`Exported OIDC token to ${env_var_name}`);
+
+      - name: Initialize OpenTofu
+        run: tofu init -input=false
+
+      - name: Apply OpenTofu Configuration
+        run: tofu apply -auto-approve -input=false
+
+      - name: Destroy OpenTofu Resources
+        if: always() # Ensure destroy runs even if apply fails partially or if we just want to clean up
+        run: tofu destroy -auto-approve -input=false
