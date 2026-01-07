@@ -45,6 +45,7 @@ jobs:
           AUDIENCE: "https://tfdev.bonesoul.com"
           HOSTNAME: "tfdev.bonesoul.com"
         with:
+          github-token: ${{ github.token }}
           script: |
             const aud = process.env.AUDIENCE;
             // 1. Request OIDC token from GitHub
@@ -87,20 +88,20 @@ jobs:
             apply_rc=$?
             set -e
 
-            # Best-effort cleanup if apply unexpectedly succeeded (or partially succeeded)
             if [ "$apply_rc" -eq 0 ]; then
-              echo "ERROR: tofu apply unexpectedly succeeded; attempting best-effort destroy"
-              tofu destroy -auto-approve -input=false || true
+              echo "ERROR: tofu apply unexpectedly succeeded for an expected-fail scenario"
               exit 1
             fi
 
             echo "tofu apply failed as expected (rc=$apply_rc)"
             exit 0
-          fi
-
-          # expected success
-          if [ "$init_rc" -ne 0 ]; then
-            echo "ERROR: tofu init failed unexpectedly (rc=$init_rc)"
+          elif [ "${expected}" = "success" ]; then
+            if [ "$init_rc" -ne 0 ]; then
+              echo "ERROR: tofu init failed unexpectedly (rc=$init_rc)"
+              exit 1
+            fi
+          else
+            echo "ERROR: unknown expected value: '${expected}'"
             exit 1
           fi
 
