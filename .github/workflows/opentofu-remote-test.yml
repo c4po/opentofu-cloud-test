@@ -11,11 +11,24 @@ permissions:
   contents: read
 
 jobs:
-  test-remote-backend:
-    name: 'Test Remote Backend'
+  remote-backend-matrix:
+    name: "Remote backend: ${{ matrix.scenario.name }}"
     runs-on: ubuntu-latest
     env:
       TF_IN_AUTOMATION: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - name: "success"
+            backend_config: "backend-config/success.hcl"
+            expected: "success"
+          - name: "wrong-org"
+            backend_config: "backend-config/wrong-org.hcl"
+            expected: "fail"
+          - name: "wrong-workspace"
+            backend_config: "backend-config/wrong-workspace.hcl"
+            expected: "fail"
 
     steps:
       - name: Checkout code
@@ -29,7 +42,7 @@ jobs:
       - name: Authenticate with TFState Backend
         uses: actions/github-script@v6
         env:
-          AUDIENCE: "https://tfdev.bonesoul.com" 
+          AUDIENCE: "https://tfdev.bonesoul.com"
           HOSTNAME: "tfdev.bonesoul.com"
         with:
           script: |
@@ -46,12 +59,49 @@ jobs:
             core.setSecret(id_token); // Mask in logs
             console.log(`Exported OIDC token to ${env_var_name}`);
 
-      - name: Initialize OpenTofu
-        run: tofu init -input=false
+      - name: Run OpenTofu (matrix scenario)
+        run: |
+          set -euo pipefail
 
-      - name: Apply OpenTofu Configuration
-        run: tofu apply -auto-approve -input=false
+          backend_config="${{ matrix.scenario.backend_config }}"
+          expected="${{ matrix.scenario.expected }}"
 
-      - name: Destroy OpenTofu Resources
-        if: always() # Ensure destroy runs even if apply fails partially or if we just want to clean up
-        run: tofu destroy -auto-approve -input=false
+          echo "Scenario: ${{ matrix.scenario.name }}"
+          echo "Backend config: ${backend_config}"
+          echo "Expected: ${expected}"
+
+          set +e
+          tofu init -reconfigure -input=false -backend-config="${backend_config}"
+          init_rc=$?
+          set -e
+
+          if [ "${expected}" = "fail" ]; then
+            if [ "$init_rc" -ne 0 ]; then
+              echo "tofu init failed as expected (rc=$init_rc)"
+              exit 0
+            fi
+
+            echo "WARNING: tofu init unexpectedly succeeded; verifying tofu apply fails..."
+            set +e
+            tofu apply -auto-approve -input=false
+            apply_rc=$?
+            set -e
+
+            # Best-effort cleanup if apply unexpectedly succeeded (or partially succeeded)
+            if [ "$apply_rc" -eq 0 ]; then
+              echo "ERROR: tofu apply unexpectedly succeeded; attempting best-effort destroy"
+              tofu destroy -auto-approve -input=false || true
+              exit 1
+            fi
+
+            echo "tofu apply failed as expected (rc=$apply_rc)"
+            exit 0
+          fi
+
+          # expected success
+          if [ "$init_rc" -ne 0 ]; then
+            echo "ERROR: tofu init failed unexpectedly (rc=$init_rc)"
+            exit 1
+          fi
+
+          tofu apply -auto-approve -input=false
